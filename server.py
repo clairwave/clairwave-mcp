@@ -10,10 +10,14 @@ platform can show it, an `open_url`. Simulation answers include the
 replication bundle (bathymetry profile, SSP, bottom parameters, grid) so a
 researcher can reproduce the run in MATLAB / Python.
 
-Open by design: no auth, https://www.clairwave.com/mcp (Streamable HTTP).
+Open by design: no caller auth, https://www.clairwave.com/mcp (Streamable HTTP).
+The server calls the platform as a premium Keycloak service account (see _bearer).
 Local: `python server.py --stdio`.
 """
 import base64
+import datetime as _dt
+import functools
+import json
 import math
 import os
 import sys
@@ -32,7 +36,21 @@ SITE = os.environ.get("CLAIRWAVE_SITE", "https://www.clairwave.com")
 # Run files (npy/json sidecars) live on the shared public volume served by the
 # site's nginx at /public/ — the backend's /json and /npy routes are pod-local.
 # NB: Cloudflare blocks generic python user agents (error 1010); ours is allowed.
-UA = {"User-Agent": "clairwave-mcp/0.2 (+https://www.clairwave.com)"}
+UA = {"User-Agent": "clairwave-mcp/0.3 (+https://www.clairwave.com)"}
+
+# ── Backend identity ─────────────────────────────────────────────────────────
+# The MCP endpoint stays open (no caller auth), but the server itself talks to
+# the platform as a dedicated Keycloak service account (client_credentials,
+# realm role premium -> `tier` claim). Callers therefore get the full solver
+# set with no free-tier caps, and every backend log line / run is attributed to
+# this identity. Without credentials the server falls back to anonymous calls.
+KC_TOKEN_URL = os.environ.get("CW_KC_TOKEN_URL", f"{SITE}/auth/realms/clairwave/protocol/openid-connect/token")
+MCP_CLIENT_ID = os.environ.get("CW_MCP_CLIENT_ID")
+MCP_CLIENT_SECRET = os.environ.get("CW_MCP_CLIENT_SECRET")
+_TOKEN: dict = {"value": None, "exp": 0.0, "tier": None}
+
+# Per-call analytics (JSONL): tool, args, latency, MCP client name/version, IP.
+LOG_PATH = os.environ.get("CW_MCP_LOG", os.path.join(os.path.dirname(os.path.abspath(__file__)), "analytics.jsonl"))
 
 mcp = FastMCP(
     "clairwave",
@@ -56,15 +74,87 @@ mcp = FastMCP(
 
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
 
+def _jwt_claims(tok: str) -> dict:
+    try:
+        p = tok.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))
+    except Exception:
+        return {}
+
+
+async def _bearer(url: str) -> dict:
+    """Authorization header for platform API calls (cached service-account token)."""
+    if not (MCP_CLIENT_ID and MCP_CLIENT_SECRET) or not url.startswith(API):
+        return {}
+    if _TOKEN["value"] and time.time() < _TOKEN["exp"] - 30:
+        return {"Authorization": f"Bearer {_TOKEN['value']}"}
+    try:
+        async with httpx.AsyncClient(timeout=20, headers=UA) as c:
+            r = await c.post(KC_TOKEN_URL, data={"grant_type": "client_credentials",
+                                                 "client_id": MCP_CLIENT_ID, "client_secret": MCP_CLIENT_SECRET})
+            r.raise_for_status()
+            j = r.json()
+        _TOKEN["value"] = j["access_token"]
+        _TOKEN["exp"] = time.time() + float(j.get("expires_in", 300))
+        _TOKEN["tier"] = _jwt_claims(j["access_token"]).get("tier")
+        return {"Authorization": f"Bearer {_TOKEN['value']}"}
+    except Exception as e:  # fail open: anonymous call rather than no call
+        print(f"[auth] service-account token failed, calling anonymously: {e}", file=sys.stderr)
+        return {}
+
+
+def _client_meta() -> dict:
+    """Who is calling: MCP client name/version (from initialize) and source IP."""
+    meta: dict = {}
+    try:
+        ctx = mcp.get_context()
+        cp = ctx.session.client_params
+        if cp is not None and cp.clientInfo is not None:
+            meta["client"] = cp.clientInfo.name
+            meta["client_version"] = cp.clientInfo.version
+        req = ctx.request_context.request
+        if req is not None:
+            h = req.headers
+            meta["ip"] = (h.get("cf-connecting-ip") or h.get("x-forwarded-for", "").split(",")[0].strip()
+                          or (req.client.host if req.client else None))
+            meta["ua"] = h.get("user-agent")
+    except Exception:
+        pass
+    return meta
+
+
+def logged(fn):
+    """Append one JSONL record per tool call to LOG_PATH (never raises)."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        t0 = time.time()
+        ok, err = True, None
+        try:
+            return await fn(*args, **kwargs)
+        except Exception as e:
+            ok, err = False, str(e)[:300]
+            raise
+        finally:
+            rec = {"ts": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+                   "tool": fn.__name__, "args": kwargs, "ms": int((time.time() - t0) * 1000),
+                   "ok": ok, "error": err, "tier": _TOKEN.get("tier"), **_client_meta()}
+            try:
+                with open(LOG_PATH, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, default=str) + "\n")
+            except Exception:
+                pass
+    return wrapper
+
+
 async def _get(url: str, **params) -> Any:
-    async with httpx.AsyncClient(timeout=90, headers=UA) as c:
+    async with httpx.AsyncClient(timeout=90, headers={**UA, **await _bearer(url)}) as c:
         r = await c.get(url, params={k: v for k, v in params.items() if v is not None})
         r.raise_for_status()
         return r.json()
 
 
 async def _post(url: str, body: dict, timeout: float = 180) -> Any:
-    async with httpx.AsyncClient(timeout=timeout, headers=UA) as c:
+    async with httpx.AsyncClient(timeout=timeout, headers={**UA, **await _bearer(url)}) as c:
         r = await c.post(url, json=body)
         if r.status_code >= 400:
             try:
@@ -106,6 +196,7 @@ async def _bathy_transect(lat: float, lon: float, bearing_deg: float, range_m: f
 
 
 @mcp.tool()
+@logged
 async def get_bathymetry(lat: float, lon: float, bearing_deg: float | None = None,
                          range_km: float = 20.0, n_points: int = 100) -> dict:
     """Seafloor depth from GEBCO 2025 (15 arc-second grid, ~450 m).
@@ -161,6 +252,7 @@ async def _environment(lat: float, lon: float, month: int) -> dict:
 
 
 @mcp.tool()
+@logged
 async def get_sound_speed_profile(lat: float, lon: float, month: int) -> dict:
     """Seasonal sound-speed profile c(z) at a location for a calendar month
     (1-12), from GDEM v3 temperature/salinity climatology, plus the seabed
@@ -206,6 +298,7 @@ def _sample(tl: np.ndarray, r_range, z_range, receiver_depths, n_out=40) -> dict
 
 
 @mcp.tool()
+@logged
 async def run_transmission_loss(lat: float, lon: float, source_depth_m: float, frequency_hz: float,
                                 bearing_deg: float, range_km: float = 20.0, month: int = 6,
                                 receiver_depths_m: list[float] | None = None) -> dict:
@@ -240,6 +333,7 @@ async def run_transmission_loss(lat: float, lon: float, source_depth_m: float, f
 
 
 @mcp.tool()
+@logged
 async def estimate_detection_range(lat: float, lon: float, source_depth_m: float, frequency_hz: float,
                                    source_level_db: float, receiver_depth_m: float, noise_level_db: float,
                                    bearing_deg: float = 0.0, max_range_km: float = 40.0, month: int = 6,
@@ -285,13 +379,15 @@ async def estimate_detection_range(lat: float, lon: float, source_depth_m: float
 
 
 @mcp.tool()
+@logged
 async def run_bellhop_volume(lat: float, lon: float, source_depth_m: float = 20, frequency_hz: float = 200,
                              radius_km: float = 10, month: int = 6) -> dict:
     """Full 3D transmission-loss volume around a source with Bellhop (all
     bearings), stored on the platform under a run id. Returns the run id,
     the replication metadata (SSP, seabed, bounding box) and file links
-    (uint8 TL cube .npy + JSON sidecar). Anonymous callers are limited to
-    200 Hz and 10 km radius by the platform's free tier."""
+    (uint8 TL cube .npy + JSON sidecar). Runs with the server's premium
+    identity, so frequency and radius are not free-tier capped (keep radius
+    <= ~50 km for reasonable run times)."""
     body = {"src_lat": lat, "src_lon": lon, "src_radius_km": radius_km, "month": int(month),
             "center_frequency": float(frequency_hz), "input_depth": int(source_depth_m), "timing": False}
     res = await _post(f"{API}/run_sim", body, timeout=300)
@@ -312,6 +408,7 @@ async def run_bellhop_volume(lat: float, lon: float, source_depth_m: float = 20,
 # ── Vessels ──────────────────────────────────────────────────────────────────
 
 @mcp.tool()
+@logged
 async def search_vessels(query: str, limit: int = 8) -> dict:
     """Search live AIS vessels by name or MMSI prefix (global feed)."""
     data = await _get(f"{API}/ais_live/search", q=query, limit=min(max(limit, 1), 25))
@@ -320,6 +417,7 @@ async def search_vessels(query: str, limit: int = 8) -> dict:
 
 
 @mcp.tool()
+@logged
 async def vessels_near(lat: float, lon: float, radius_km: float = 25.0, limit: int = 30) -> dict:
     """Live AIS vessels within radius_km of a point, nearest first, with
     position, course/speed, type, dimensions and last-update time."""
@@ -340,6 +438,7 @@ async def vessels_near(lat: float, lon: float, radius_km: float = 25.0, limit: i
 
 
 @mcp.tool()
+@logged
 async def get_vessel(mmsi: str) -> dict:
     """Everything about one vessel: live AIS position/track and static
     particulars, plus its 3D model (unique photo-derived model if generated,
@@ -367,6 +466,7 @@ async def get_vessel(mmsi: str) -> dict:
 
 
 @mcp.tool()
+@logged
 async def vessel_source_level(mmsi: str | None = None, ship_type: int | None = None, speed_kn: float | None = None,
                               length_m: float | None = None, beam_m: float | None = None,
                               draft_m: float | None = None) -> dict:
@@ -398,6 +498,7 @@ async def vessel_source_level(mmsi: str | None = None, ship_type: int | None = N
 
 
 @mcp.tool()
+@logged
 async def get_vessel_photo(imo: int | None = None, mmsi: str | None = None, name: str | None = None) -> dict:
     """Photograph of a vessel from Wikimedia Commons, with attribution."""
     r = await _get(f"{API}/vessel_photo", imo=imo, mmsi=mmsi, name=name)
@@ -408,6 +509,7 @@ async def get_vessel_photo(imo: int | None = None, mmsi: str | None = None, name
 # ── Discovery ────────────────────────────────────────────────────────────────
 
 @mcp.tool()
+@logged
 async def about() -> dict:
     """What Clairwave provides, which models/data back each tool, and limits."""
     return {
@@ -419,7 +521,8 @@ async def about() -> dict:
                  "seabed": "lithology lookup -> cp, cs, density ratio, attenuation",
                  "ais": "AISHub peer network + Clairwave VHF receivers", "models_3d": "shipshape (open, MMSI-keyed)"},
         "reproducibility": "simulation tools return the SSP, bottom parameters, bathymetry transect and grid used, plus an environment run id whose JSON sidecar is downloadable",
-        "limits": "anonymous: Bellhop volume runs limited to 200 Hz / 10 km; RAM transmission loss unrestricted; ~20 compute calls/min",
+        "identity": ("premium service account (full solver set, no free-tier caps)" if MCP_CLIENT_ID else "anonymous (free tier caps apply)"),
+        "limits": "shared ~20 compute calls/min across all MCP callers; no per-caller auth required",
         "open_source": {"shipshape": "https://github.com/clairwave/shipshape",
                         "mcp_server": "https://github.com/clairwave/clairwave-mcp"},
     }
