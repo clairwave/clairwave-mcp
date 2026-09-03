@@ -60,7 +60,7 @@ async def search_vessels(query: str, limit: int = 8) -> dict:
     data = await _get(f"{API}/ais_live/search", q=query, limit=min(max(limit, 1), 25))
     results = []
     for v in data.get("results", []):
-        results.append({**v, "open_url": f"{SITE}/app?mmsi={v.get('mmsi')}"})
+        results.append({**v, "open_url": f"{SITE}/demo?guest=1&mmsi={v.get('mmsi')}"})
     return {"results": results, "provenance": _prov("AIS live feed (AISHub peer network + own VHF receivers)")}
 
 
@@ -72,7 +72,7 @@ async def get_vessel(mmsi: str) -> dict:
     r = await _get(f"{FLEET}/api/resolve/{mmsi}")
     if r.get("url"):
         r["model_glb_url"] = SITE + r.pop("url")
-    r["open_url"] = f"{SITE}/app?mmsi={mmsi}"
+    r["open_url"] = f"{SITE}/demo?guest=1&mmsi={mmsi}"
     r["fleet_url"] = f"{SITE}/fleet/?q={mmsi}"
     r["provenance"] = _prov("AIS static data + shipshape model database (github.com/clairwave/shipshape)")
     return r
