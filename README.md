@@ -27,11 +27,19 @@ used, so a researcher can replicate the run in MATLAB, Python or anything else.
 
 | Tool | What it does |
 |---|---|
-| `search_vessels` | Live AIS search by name / MMSI prefix (global feed) |
-| `get_vessel` | Vessel particulars + 3D model (unique or class archetype), GLB URL, platform link |
+| `get_bathymetry` | GEBCO 2025 depth at a point, or a transect profile along a bearing |
+| `get_sound_speed_profile` | GDEM v3 seasonal c(z) for a month + seabed parameters (cp, cs, density, attenuation, sediment) |
+| `run_transmission_loss` | RAM parabolic-equation TL along a bearing; bathymetry/SSP/seabed fetched automatically; replication bundle included |
+| `estimate_detection_range` | Sonar equation on a RAM run: continuous and furthest detection range, signal excess vs range |
+| `run_bellhop_volume` | 3D Bellhop TL volume stored under a run id (uint8 cube + JSON sidecar links) |
+| `vessel_source_level` | Ship radiated noise: broadband + third-octave spectrum + mechanism breakdown (ECHO/RANDI-class model) |
+| `search_vessels` / `vessels_near` | Live AIS by name/MMSI, or within a radius of a point |
+| `get_vessel` | Live position/track, particulars, and the 3D model (GLB, bow=+Z) with platform links |
 | `get_vessel_photo` | Wikimedia Commons photo with attribution |
-| `about` | What the platform provides and how results are grounded |
-| *(next)* `get_sound_speed_profile`, `get_bathymetry`, `run_transmission_loss`, `estimate_detection_range` | Physics — coming as the wrapping of the simulation API lands |
+| `about` | Models, data sources, limits |
+
+Typical latency against the live platform: bathymetry 0.5 s, SSP 6 s first time
+per 0.1° cell then cached, RAM transmission loss 1–3 s, detection range 1–3 s.
 
 ## Run locally
 
