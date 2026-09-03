@@ -52,6 +52,22 @@ python tests/smoke_client.py
 
 Environment: `CLAIRWAVE_API`, `CLAIRWAVE_FLEET`, `CLAIRWAVE_SITE`, `MCP_PORT`.
 
+## Example prompts
+
+- "What is the sound speed profile 50 km west of Gibraltar in March, and where is the sonic layer depth?"
+- "How far could a 150 Hz, 170 dB source at 20 m depth be detected by a receiver at 100 m near 36N 5.5W, along bearing 090?"
+- "Show transmission loss versus range at 200 Hz out to 30 km north of Halifax in winter."
+- "What ships are within 15 km of the Strait of Hormuz right now, and how loud is the largest one?"
+- "Run a 3D Bellhop volume at 400 Hz around 49.2N 123.3W and give me the link to open it."
+
+## Limits and support
+
+- No sign-in. Compute calls share a platform-wide budget of about 20 per minute.
+- Simulations are climatology-based (GDEM monthly sound speed, GEBCO bathymetry) and are
+  not a substitute for in-situ measurements.
+- Privacy policy: [PRIVACY.md](PRIVACY.md). Support: contact@clairwave.com.
+  Issues: https://github.com/clairwave/clairwave-mcp/issues
+
 ## Backend identity and analytics
 
 The MCP endpoint itself is open (no caller auth). The server calls the Clairwave

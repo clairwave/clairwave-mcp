@@ -27,6 +27,7 @@ from typing import Any
 import httpx
 import numpy as np
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from shipnoise import compute_source_level, quick_broadband_sl
 
@@ -195,7 +196,7 @@ async def _bathy_transect(lat: float, lon: float, bearing_deg: float, range_m: f
     return {"r_m": prof["r"], "depth_m": prof["z"]}
 
 
-@mcp.tool()
+@mcp.tool(title="Bathymetry (GEBCO)", annotations=ToolAnnotations(title="Bathymetry (GEBCO)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def get_bathymetry(lat: float, lon: float, bearing_deg: float | None = None,
                          range_km: float = 20.0, n_points: int = 100) -> dict:
@@ -251,7 +252,7 @@ async def _environment(lat: float, lon: float, month: int) -> dict:
     return env
 
 
-@mcp.tool()
+@mcp.tool(title="Sound speed profile (GDEM)", annotations=ToolAnnotations(title="Sound speed profile (GDEM)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def get_sound_speed_profile(lat: float, lon: float, month: int) -> dict:
     """Seasonal sound-speed profile c(z) at a location for a calendar month
@@ -297,7 +298,7 @@ def _sample(tl: np.ndarray, r_range, z_range, receiver_depths, n_out=40) -> dict
     return out
 
 
-@mcp.tool()
+@mcp.tool(title="Transmission loss (RAM PE)", annotations=ToolAnnotations(title="Transmission loss (RAM PE)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def run_transmission_loss(lat: float, lon: float, source_depth_m: float, frequency_hz: float,
                                 bearing_deg: float, range_km: float = 20.0, month: int = 6,
@@ -332,7 +333,7 @@ async def run_transmission_loss(lat: float, lon: float, source_depth_m: float, f
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Detection range (sonar equation)", annotations=ToolAnnotations(title="Detection range (sonar equation)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def estimate_detection_range(lat: float, lon: float, source_depth_m: float, frequency_hz: float,
                                    source_level_db: float, receiver_depth_m: float, noise_level_db: float,
@@ -378,7 +379,7 @@ async def estimate_detection_range(lat: float, lon: float, source_depth_m: float
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Bellhop 3D TL volume (stored run)", annotations=ToolAnnotations(title="Bellhop 3D TL volume (stored run)", readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def run_bellhop_volume(lat: float, lon: float, source_depth_m: float = 20, frequency_hz: float = 200,
                              radius_km: float = 10, month: int = 6) -> dict:
@@ -407,7 +408,7 @@ async def run_bellhop_volume(lat: float, lon: float, source_depth_m: float = 20,
 
 # ── Vessels ──────────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(title="Search vessels (AIS)", annotations=ToolAnnotations(title="Search vessels (AIS)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def search_vessels(query: str, limit: int = 8) -> dict:
     """Search live AIS vessels by name or MMSI prefix (global feed)."""
@@ -416,7 +417,7 @@ async def search_vessels(query: str, limit: int = 8) -> dict:
     return {"results": results, "provenance": _prov("AIS live feed (AISHub peer network + Clairwave VHF receivers)")}
 
 
-@mcp.tool()
+@mcp.tool(title="Vessels near a point (AIS)", annotations=ToolAnnotations(title="Vessels near a point (AIS)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def vessels_near(lat: float, lon: float, radius_km: float = 25.0, limit: int = 30) -> dict:
     """Live AIS vessels within radius_km of a point, nearest first, with
@@ -437,7 +438,7 @@ async def vessels_near(lat: float, lon: float, radius_km: float = 25.0, limit: i
             "provenance": _prov("AIS live feed (AISHub peer network + Clairwave VHF receivers)")}
 
 
-@mcp.tool()
+@mcp.tool(title="Vessel details + 3D model", annotations=ToolAnnotations(title="Vessel details + 3D model", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def get_vessel(mmsi: str) -> dict:
     """Everything about one vessel: live AIS position/track and static
@@ -465,7 +466,7 @@ async def get_vessel(mmsi: str) -> dict:
     return out
 
 
-@mcp.tool()
+@mcp.tool(title="Vessel source level", annotations=ToolAnnotations(title="Vessel source level", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def vessel_source_level(mmsi: str | None = None, ship_type: int | None = None, speed_kn: float | None = None,
                               length_m: float | None = None, beam_m: float | None = None,
@@ -497,7 +498,7 @@ async def vessel_source_level(mmsi: str | None = None, ship_type: int | None = N
     return r
 
 
-@mcp.tool()
+@mcp.tool(title="Vessel photo", annotations=ToolAnnotations(title="Vessel photo", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def get_vessel_photo(imo: int | None = None, mmsi: str | None = None, name: str | None = None) -> dict:
     """Photograph of a vessel from Wikimedia Commons, with attribution."""
@@ -508,7 +509,7 @@ async def get_vessel_photo(imo: int | None = None, mmsi: str | None = None, name
 
 # ── Discovery ────────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(title="About Clairwave", annotations=ToolAnnotations(title="About Clairwave", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def about() -> dict:
     """What Clairwave provides, which models/data back each tool, and limits."""
