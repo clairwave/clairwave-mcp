@@ -1,0 +1,7 @@
+[project]
+name = "clairwave-mcp"
+version = "0.1.0"
+description = "MCP server exposing the Clairwave ocean-acoustics platform to AI assistants: physically grounded, reproducible, cited."
+requires-python = ">=3.10"
+dependencies = ["mcp[cli]>=1.9,<2", "httpx>=0.27"]
+license = "MIT"
