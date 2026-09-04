@@ -3,7 +3,7 @@
   "name": "io.github.clairwave/clairwave",
   "title": "Clairwave",
   "description": "Ocean acoustics: propagation models, bathymetry, sound speed, vessel noise, live AIS. Open.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "websiteUrl": "https://www.clairwave.com",
   "repository": {
     "url": "https://github.com/clairwave/clairwave-mcp",

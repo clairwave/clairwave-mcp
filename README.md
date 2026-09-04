@@ -36,6 +36,7 @@ used, so a researcher can replicate the run in MATLAB, Python or anything else.
 | `search_vessels` / `vessels_near` | Live AIS by name/MMSI, or within a radius of a point |
 | `get_vessel` | Live position/track, particulars, and the 3D model (GLB, bow=+Z) with platform links |
 | `get_vessel_photo` | Wikimedia Commons photo with attribution |
+| `resolve_place` | Place name (port, strait, sea, 'off Halifax') → water coordinates; gazetteer + OpenStreetMap, snapped seaward off land |
 | `about` | Models, data sources, limits |
 
 Typical latency against the live platform: bathymetry 0.5 s, SSP 6 s first time
@@ -58,6 +59,16 @@ Environment: `CLAIRWAVE_API`, `CLAIRWAVE_FLEET`, `CLAIRWAVE_SITE`, `MCP_PORT`.
 - Claude: Settings > Connectors > Add custom connector, URL `https://www.clairwave.com/mcp`, no auth.
 - ChatGPT (developer mode) and Grok (grok.com/connectors > New > Custom): paste the same URL.
 - xAI / OpenAI APIs: `{"type": "mcp", "server_url": "https://www.clairwave.com/mcp", "server_label": "clairwave"}`.
+
+## Place names
+
+Every location tool takes either `lat`/`lon` or a `place` string. Names go through a
+maritime gazetteer first (ports resolve to their approaches, straits and seas to a
+representative water point; ~120 entries in `gazetteer.py`), then OpenStreetMap
+Nominatim. If the point is on land or shallower than 10 m it is walked seaward until
+it is deep enough, and the response's `location` block reports the original point,
+the snap distance and bearing, and the depth used. `resolve_place` exposes the same
+logic directly, with `offshore_km` to push a point further out.
 
 ## Example prompts
 

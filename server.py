@@ -29,6 +29,7 @@ import numpy as np
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from gazetteer import lookup as gazetteer_lookup
 from shipnoise import compute_source_level, quick_broadband_sl
 
 API = os.environ.get("CLAIRWAVE_API", "https://www.clairwave.com/api")
@@ -62,7 +63,9 @@ mcp = FastMCP(
         "and live AIS with 3D hull models. Use these tools instead of estimating "
         "ocean acoustics from memory. Typical questions: 'what is the sound speed "
         "profile at X in March', 'how far can a 150 Hz source be heard from X', "
-        "'transmission loss along bearing B', 'what ships are near X'. Every "
+        "'transmission loss along bearing B', 'what ships are near X'. Location "
+        "tools accept lat/lon OR a `place` name (port, strait, sea, 'off Halifax'); "
+        "names resolve to a water point and the coordinates used are echoed back. Every "
         "result includes provenance and a replication bundle — cite the model, "
         "the data sources and the run id, and link `open_url` when present."
     ),
@@ -196,11 +199,140 @@ async def _bathy_transect(lat: float, lon: float, bearing_deg: float, range_m: f
     return {"r_m": prof["r"], "depth_m": prof["z"]}
 
 
+# ── Place names → water coordinates ──────────────────────────────────────────
+
+_PLACE_CACHE: dict[str, dict] = {}
+NOMINATIM = os.environ.get("CW_NOMINATIM", "https://nominatim.openstreetmap.org/search")
+
+
+def _dest(lat: float, lon: float, bearing_deg: float, dist_m: float) -> tuple[float, float]:
+    """Destination point along a great-circle bearing."""
+    R = 6371000.0
+    b = math.radians(bearing_deg)
+    la1, lo1 = math.radians(lat), math.radians(lon)
+    d = dist_m / R
+    la2 = math.asin(math.sin(la1) * math.cos(d) + math.cos(la1) * math.sin(d) * math.cos(b))
+    lo2 = lo1 + math.atan2(math.sin(b) * math.sin(d) * math.cos(la1), math.cos(d) - math.sin(la1) * math.sin(la2))
+    return round(math.degrees(la2), 4), round((math.degrees(lo2) + 540) % 360 - 180, 4)
+
+
+async def _depth_at(lat: float, lon: float) -> float:
+    t = await _bathy_transect(lat, lon, 0, 50, 2)
+    return float(t["depth_m"][0])
+
+
+async def _snap_to_water(lat: float, lon: float, bearing: float | None, min_depth_m: float,
+                         max_km: float = 80.0) -> dict | None:
+    """Walk seaward until GEBCO depth >= min_depth_m; try the preferred bearing
+    first, then 8 compass points, keep the shortest walk. None if nothing found."""
+    bearings = ([bearing] if bearing is not None else []) + [0, 45, 90, 135, 180, 225, 270, 315]
+    best = None
+    for b in bearings:
+        t = await _bathy_transect(lat, lon, b, max_km * 1000, 160)
+        for r, z in zip(t["r_m"], t["depth_m"]):
+            if z >= min_depth_m:
+                r2 = r + 2000.0  # a little margin past the shoreline / shelf edge
+                if best is None or r2 < best[0]:
+                    best = (r2, b)
+                break
+        if best and b == bearing:
+            break  # preferred direction worked; no need to scan the compass
+    if not best:
+        return None
+    la, lo = _dest(lat, lon, best[1], best[0])
+    return {"lat": la, "lon": lo, "bearing_deg": best[1], "distance_km": round(best[0] / 1000, 1)}
+
+
+async def _nominatim(q: str) -> dict | None:
+    async with httpx.AsyncClient(timeout=20, headers=UA) as c:
+        r = await c.get(NOMINATIM, params={"q": q, "format": "jsonv2", "limit": 1})
+        r.raise_for_status()
+        hits = r.json()
+    if not hits:
+        return None
+    h = hits[0]
+    return {"lat": float(h["lat"]), "lon": float(h["lon"]), "display_name": h.get("display_name"),
+            "category": h.get("category"), "type": h.get("type")}
+
+
+async def _resolve(place: str, seaward_bearing_deg: float | None = None, offshore_km: float | None = None,
+                   min_depth_m: float = 10.0) -> dict:
+    key = f"{place.strip().lower()}|{seaward_bearing_deg}|{offshore_km}|{min_depth_m}"
+    if key in _PLACE_CACHE:
+        return _PLACE_CACHE[key]
+    info: dict = {"query": place}
+    g = gazetteer_lookup(place)
+    if g:
+        name, lat, lon, seaward, how = g
+        info.update({"matched": name, "lat": lat, "lon": lon, "source": how,
+                     "seaward_bearing_deg": seaward if seaward_bearing_deg is None else seaward_bearing_deg})
+    else:
+        n = await _nominatim(place)
+        if not n:
+            raise ValueError(f"could not resolve place '{place}'; give lat/lon instead")
+        info.update({"matched": n["display_name"], "lat": n["lat"], "lon": n["lon"],
+                     "source": "nominatim (OpenStreetMap)", "seaward_bearing_deg": seaward_bearing_deg})
+    if offshore_km:
+        b = info.get("seaward_bearing_deg")
+        if b is None:
+            raise ValueError("offshore_km needs seaward_bearing_deg for places outside the gazetteer")
+        info["lat"], info["lon"] = _dest(info["lat"], info["lon"], b, offshore_km * 1000)
+        info["offshore_km"] = offshore_km
+    depth = await _depth_at(info["lat"], info["lon"])
+    info["snapped_to_water"] = False
+    if depth < min_depth_m:
+        snap = await _snap_to_water(info["lat"], info["lon"], info.get("seaward_bearing_deg"), min_depth_m)
+        if not snap:
+            raise ValueError(f"'{place}' resolved to {info['lat']},{info['lon']} but no water >= {min_depth_m} m within 80 km")
+        info.update({"original": {"lat": info["lat"], "lon": info["lon"], "depth_m": round(depth, 1)},
+                     "lat": snap["lat"], "lon": snap["lon"], "snapped_to_water": True,
+                     "snap": {"bearing_deg": snap["bearing_deg"], "distance_km": snap["distance_km"]}})
+        depth = await _depth_at(info["lat"], info["lon"])
+    info["depth_m"] = round(depth, 1)
+    info["provenance"] = _prov("Clairwave maritime gazetteer + OpenStreetMap Nominatim fallback; depth check GEBCO 2025")
+    _PLACE_CACHE[key] = info
+    return info
+
+
+def placed(fn):
+    """Let a lat/lon tool accept `place` instead; echo the resolved location."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kw):
+        info = None
+        if kw.get("lat") is None or kw.get("lon") is None:
+            if not kw.get("place"):
+                raise ValueError("give lat and lon, or a place name in `place`")
+            info = await _resolve(kw["place"])
+            kw["lat"], kw["lon"] = info["lat"], info["lon"]
+        out = await fn(*args, **kw)
+        if info is not None and isinstance(out, dict):
+            out["location"] = info
+        return out
+    return wrapper
+
+
+@mcp.tool(title="Resolve place name", annotations=ToolAnnotations(title="Resolve place name", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+@logged
+async def resolve_place(place: str, seaward_bearing_deg: float | None = None, offshore_km: float | None = None,
+                        min_depth_m: float = 10.0) -> dict:
+    """Turn a place name ('outside Halifax', 'Strait of Hormuz', 'Bergen,
+    Norway') into water coordinates. Maritime gazetteer first (ports resolve
+    to their approaches, straits/seas to a representative point), then
+    OpenStreetMap. Points on land or shallower than min_depth_m are walked
+    seaward along the gazetteer bearing (or the nearest direction) until deep
+    enough; the original point and the snap are reported. offshore_km pushes
+    the point further out along seaward_bearing_deg. All location tools also
+    accept `place` directly, so a separate call is only needed to inspect."""
+    return await _resolve(place, seaward_bearing_deg, offshore_km, min_depth_m)
+
+
 @mcp.tool(title="Bathymetry (GEBCO)", annotations=ToolAnnotations(title="Bathymetry (GEBCO)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
-async def get_bathymetry(lat: float, lon: float, bearing_deg: float | None = None,
-                         range_km: float = 20.0, n_points: int = 100) -> dict:
-    """Seafloor depth from GEBCO 2025 (15 arc-second grid, ~450 m).
+@placed
+async def get_bathymetry(lat: float | None = None, lon: float | None = None, place: str | None = None,
+                         bearing_deg: float | None = None, range_km: float = 20.0, n_points: int = 100) -> dict:
+    """Seafloor depth from GEBCO 2025 (15 arc-second grid, ~450 m). Location:
+    lat/lon or `place` (name resolved to a water point, echoed in `location`).
     Without a bearing: depth at the point. With a bearing (compass degrees,
     0 = north): a depth profile along that transect out to range_km."""
     if bearing_deg is None:
@@ -254,8 +386,11 @@ async def _environment(lat: float, lon: float, month: int) -> dict:
 
 @mcp.tool(title="Sound speed profile (GDEM)", annotations=ToolAnnotations(title="Sound speed profile (GDEM)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
-async def get_sound_speed_profile(lat: float, lon: float, month: int) -> dict:
-    """Seasonal sound-speed profile c(z) at a location for a calendar month
+@placed
+async def get_sound_speed_profile(month: int, lat: float | None = None, lon: float | None = None,
+                                  place: str | None = None) -> dict:
+    """Seasonal sound-speed profile c(z) at a location (lat/lon or `place`
+    name, e.g. "Halifax approaches") for a calendar month
     (1-12), from GDEM v3 temperature/salinity climatology, plus the seabed
     parameters (compressional/shear speed, density ratio, attenuation,
     sediment type) at the same point. Cached per 0.1 degree."""
@@ -300,11 +435,13 @@ def _sample(tl: np.ndarray, r_range, z_range, receiver_depths, n_out=40) -> dict
 
 @mcp.tool(title="Transmission loss (RAM PE)", annotations=ToolAnnotations(title="Transmission loss (RAM PE)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
-async def run_transmission_loss(lat: float, lon: float, source_depth_m: float, frequency_hz: float,
-                                bearing_deg: float, range_km: float = 20.0, month: int = 6,
+@placed
+async def run_transmission_loss(source_depth_m: float, frequency_hz: float, bearing_deg: float,
+                                lat: float | None = None, lon: float | None = None, place: str | None = None,
+                                range_km: float = 20.0, month: int = 6,
                                 receiver_depths_m: list[float] | None = None) -> dict:
     """Run a physically grounded transmission-loss simulation (RAM parabolic
-    equation) from a source at (lat, lon, depth) along a compass bearing.
+    equation) from a source at (lat, lon or `place`, depth) along a compass bearing.
     Bathymetry (GEBCO), the seasonal sound-speed profile (GDEM, `month`) and
     seabed parameters are fetched for the location automatically. Returns TL
     vs range at the receiver depths (default: source depth, 10 m, 100 m,
@@ -335,11 +472,13 @@ async def run_transmission_loss(lat: float, lon: float, source_depth_m: float, f
 
 @mcp.tool(title="Detection range (sonar equation)", annotations=ToolAnnotations(title="Detection range (sonar equation)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
-async def estimate_detection_range(lat: float, lon: float, source_depth_m: float, frequency_hz: float,
-                                   source_level_db: float, receiver_depth_m: float, noise_level_db: float,
+@placed
+async def estimate_detection_range(source_depth_m: float, frequency_hz: float, source_level_db: float,
+                                   receiver_depth_m: float, noise_level_db: float,
+                                   lat: float | None = None, lon: float | None = None, place: str | None = None,
                                    bearing_deg: float = 0.0, max_range_km: float = 40.0, month: int = 6,
                                    detection_threshold_db: float = 0.0) -> dict:
-    """Passive sonar detection range along a bearing: runs a RAM transmission
+    """Location: lat/lon or `place` name. Passive sonar detection range along a bearing: runs a RAM transmission
     loss simulation for the location/season and applies the sonar equation
     SE = SL - TL - NL (- DT) at the receiver depth. Returns the first range
     where detection is lost, the furthest range still detectable (convergence
@@ -381,10 +520,12 @@ async def estimate_detection_range(lat: float, lon: float, source_depth_m: float
 
 @mcp.tool(title="Bellhop 3D TL volume (stored run)", annotations=ToolAnnotations(title="Bellhop 3D TL volume (stored run)", readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
-async def run_bellhop_volume(lat: float, lon: float, source_depth_m: float = 20, frequency_hz: float = 200,
+@placed
+async def run_bellhop_volume(lat: float | None = None, lon: float | None = None, place: str | None = None,
+                             source_depth_m: float = 20, frequency_hz: float = 200,
                              radius_km: float = 10, month: int = 6) -> dict:
-    """Full 3D transmission-loss volume around a source with Bellhop (all
-    bearings), stored on the platform under a run id. Returns the run id,
+    """Full 3D transmission-loss volume around a source (lat/lon or `place`)
+    with Bellhop (all bearings), stored on the platform under a run id. Returns the run id,
     the replication metadata (SSP, seabed, bounding box) and file links
     (uint8 TL cube .npy + JSON sidecar). Runs with the server's premium
     identity, so frequency and radius are not free-tier capped (keep radius
@@ -419,8 +560,10 @@ async def search_vessels(query: str, limit: int = 8) -> dict:
 
 @mcp.tool(title="Vessels near a point (AIS)", annotations=ToolAnnotations(title="Vessels near a point (AIS)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
-async def vessels_near(lat: float, lon: float, radius_km: float = 25.0, limit: int = 30) -> dict:
-    """Live AIS vessels within radius_km of a point, nearest first, with
+@placed
+async def vessels_near(lat: float | None = None, lon: float | None = None, place: str | None = None,
+                       radius_km: float = 25.0, limit: int = 30) -> dict:
+    """Live AIS vessels within radius_km of a point (lat/lon or `place`), nearest first, with
     position, course/speed, type, dimensions and last-update time."""
     b = _bbox(lat, lon, radius_km)
     d = await _get(f"{API}/ais_live/area", **b)

@@ -13,7 +13,9 @@ URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8890/mcp"
 GIB = {"lat": 36.0, "lon": -5.5}
 
 CALLS = [
+    ("resolve_place", {"place": "outside Halifax"}),
     ("get_bathymetry", {**GIB}),
+    ("get_sound_speed_profile", {"place": "Halifax approaches", "month": 8}),
     ("get_sound_speed_profile", {**GIB, "month": 3}),
     ("run_transmission_loss", {**GIB, "source_depth_m": 20, "frequency_hz": 150, "bearing_deg": 90, "range_km": 20, "month": 3}),
     ("estimate_detection_range", {**GIB, "source_depth_m": 8, "frequency_hz": 150, "source_level_db": 170,
