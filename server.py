@@ -529,8 +529,24 @@ async def about() -> dict:
     }
 
 
+class _TrailingSlash:
+    """Serve /mcp/ exactly like /mcp. Starlette answers /mcp/ with a 307 to
+    /mcp, and some connector clients (Grok's grok-connectors-manager) do not
+    follow redirects on POST, so they see an empty tool list."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "").rstrip("/") == "/mcp":
+            scope = dict(scope, path="/mcp", raw_path=b"/mcp")
+        await self.app(scope, receive, send)
+
+
 if __name__ == "__main__":
     if "--stdio" in sys.argv:
         mcp.run(transport="stdio")
     else:
-        mcp.run(transport="streamable-http")
+        import uvicorn
+        uvicorn.run(_TrailingSlash(mcp.streamable_http_app()), host=mcp.settings.host,
+                    port=mcp.settings.port, log_level=mcp.settings.log_level.lower())
