@@ -52,6 +52,13 @@ python tests/smoke_client.py
 
 Environment: `CLAIRWAVE_API`, `CLAIRWAVE_FLEET`, `CLAIRWAVE_SITE`, `MCP_PORT`.
 
+## Where to find it
+
+- Official MCP Registry: `io.github.clairwave/clairwave` (https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.clairwave/clairwave)
+- Claude: Settings > Connectors > Add custom connector, URL `https://www.clairwave.com/mcp`, no auth.
+- ChatGPT (developer mode) and Grok (grok.com/connectors > New > Custom): paste the same URL.
+- xAI / OpenAI APIs: `{"type": "mcp", "server_url": "https://www.clairwave.com/mcp", "server_label": "clairwave"}`.
+
 ## Example prompts
 
 - "What is the sound speed profile 50 km west of Gibraltar in March, and where is the sonic layer depth?"

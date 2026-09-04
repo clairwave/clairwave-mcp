@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.clairwave/clairwave",
+  "title": "Clairwave",
+  "description": "Ocean acoustics: propagation models, bathymetry, sound speed, vessel noise, live AIS. Open.",
+  "version": "0.3.0",
+  "websiteUrl": "https://www.clairwave.com",
+  "repository": {
+    "url": "https://github.com/clairwave/clairwave-mcp",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://www.clairwave.com/mcp"
+    }
+  ]
+}
