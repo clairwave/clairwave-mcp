@@ -58,8 +58,8 @@ mcp = FastMCP(
     "clairwave",
     instructions=(
         "Clairwave is an ocean-acoustics platform: validated propagation models "
-        "(RAM parabolic equation, Bellhop), GEBCO bathymetry, GDEM seasonal "
-        "sound-speed climatology, seabed lithology, vessel source-level models, "
+        "(RAM parabolic equation, Bellhop), Clairwave-served bathymetry, seasonal "
+        "sound-speed climatology and seabed acoustic parameters, vessel source-level models, "
         "and live AIS with 3D hull models. Use these tools instead of estimating "
         "ocean acoustics from memory. Typical questions: 'what is the sound speed "
         "profile at X in March', 'how far can a 150 Hz source be heard from X', "
@@ -226,7 +226,7 @@ async def _depth_at(lat: float, lon: float) -> float:
 
 async def _snap_to_water(lat: float, lon: float, bearing: float | None, min_depth_m: float,
                          max_km: float = 80.0) -> dict | None:
-    """Walk seaward until GEBCO depth >= min_depth_m; try the preferred bearing
+    """Walk seaward until depth >= min_depth_m; try the preferred bearing
     first, then 8 compass points, keep the shortest walk. None if nothing found."""
     bearings = ([bearing] if bearing is not None else []) + [0, 45, 90, 135, 180, 225, 270, 315]
     best = None
@@ -292,7 +292,7 @@ async def _resolve(place: str, seaward_bearing_deg: float | None = None, offshor
                      "snap": {"bearing_deg": snap["bearing_deg"], "distance_km": snap["distance_km"]}})
         depth = await _depth_at(info["lat"], info["lon"])
     info["depth_m"] = round(depth, 1)
-    info["provenance"] = _prov("Clairwave maritime gazetteer + OpenStreetMap Nominatim fallback; depth check GEBCO 2025")
+    info["provenance"] = _prov("Clairwave maritime gazetteer + OpenStreetMap Nominatim fallback; depth check Clairwave-served bathymetry")
     _PLACE_CACHE[key] = info
     return info
 
@@ -329,32 +329,32 @@ async def resolve_place(place: str, seaward_bearing_deg: float | None = None, of
     return await _resolve(place, seaward_bearing_deg, offshore_km, min_depth_m)
 
 
-@mcp.tool(title="Bathymetry (GEBCO)", annotations=ToolAnnotations(title="Bathymetry (GEBCO)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+@mcp.tool(title="Bathymetry", annotations=ToolAnnotations(title="Bathymetry", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 @placed
 async def get_bathymetry(lat: float | None = None, lon: float | None = None, place: str | None = None,
                          bearing_deg: float | None = None, range_km: float = 20.0, n_points: int = 100) -> dict:
-    """Seafloor depth from GEBCO 2025 (15 arc-second grid, ~450 m). Location:
+    """Seafloor depth from Clairwave-served global bathymetry (~450 m resolution). Location:
     lat/lon or `place` (name resolved to a water point, echoed in `location`).
     Without a bearing: depth at the point. With a bearing (compass degrees,
     0 = north): a depth profile along that transect out to range_km."""
     if bearing_deg is None:
         t = await _bathy_transect(lat, lon, 0, 50, 2)
         return {"lat": lat, "lon": lon, "depth_m": round(float(t["depth_m"][0]), 1),
-                "provenance": _prov("GEBCO 2025 global grid, bilinear sample")}
+                "provenance": _prov("Clairwave-served bathymetry, bilinear sample")}
     t = await _bathy_transect(lat, lon, bearing_deg, range_km * 1000, max(2, min(n_points, 400)))
     zs = t["depth_m"]
     return {"lat": lat, "lon": lon, "bearing_deg": bearing_deg, "range_km": range_km,
             "profile": [{"r_m": round(r, 1), "depth_m": round(z, 1)} for r, z in zip(t["r_m"], zs)],
             "min_depth_m": round(min(zs), 1), "max_depth_m": round(max(zs), 1),
-            "provenance": _prov("GEBCO 2025 global grid, bilinear samples along a great-circle bearing")}
+            "provenance": _prov("Clairwave-served bathymetry, bilinear samples along a great-circle bearing")}
 
 
 _ENV_CACHE: dict[tuple, dict] = {}
 
 
 async def _environment(lat: float, lon: float, month: int) -> dict:
-    """GDEM v3 seasonal SSP + seabed lithology at (lat, lon) via a small
+    """Seasonal SSP + seabed parameters at (lat, lon) via a small
     Bellhop run — the only server path that returns both. Cached per 0.1°."""
     key = (round(lat, 1), round(lon, 1), int(month))
     if key in _ENV_CACHE:
@@ -380,21 +380,21 @@ async def _environment(lat: float, lon: float, month: int) -> dict:
         "open_url": f"{SITE}/demo?guest=1&run={run_id}",
         "files": {"json": f"{SITE}/public/{res['json_file']}", "npy": f"{SITE}/public/{res['npy_file']}",
                   "bathy_npy": f"{SITE}/public/{run_id}_bathy.npy"},
-        "provenance": _prov("GDEM v3 monthly T/S climatology -> sound speed; seabed lithology lookup; via Bellhop probe run",
+        "provenance": _prov("Clairwave-served seasonal sound-speed climatology and seabed parameters; via Bellhop probe run",
                             run_id=run_id),
     }
     _ENV_CACHE[key] = env
     return env
 
 
-@mcp.tool(title="Sound speed profile (GDEM)", annotations=ToolAnnotations(title="Sound speed profile (GDEM)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+@mcp.tool(title="Sound speed profile", annotations=ToolAnnotations(title="Sound speed profile", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 @placed
 async def get_sound_speed_profile(month: int, lat: float | None = None, lon: float | None = None,
                                   place: str | None = None) -> dict:
     """Seasonal sound-speed profile c(z) at a location (lat/lon or `place`
     name, e.g. "Halifax approaches") for a calendar month
-    (1-12), from GDEM v3 temperature/salinity climatology, plus the seabed
+    (1-12), from Clairwave-served seasonal temperature/salinity climatology, plus the seabed
     parameters (compressional/shear speed, density ratio, attenuation,
     sediment type) at the same point. Cached per 0.1 degree."""
     env = await _environment(lat, lon, month)
@@ -445,7 +445,7 @@ async def run_transmission_loss(source_depth_m: float, frequency_hz: float, bear
                                 receiver_depths_m: list[float] | None = None) -> dict:
     """Run a physically grounded transmission-loss simulation (RAM parabolic
     equation) from a source at (lat, lon or `place`, depth) along a compass bearing.
-    Bathymetry (GEBCO), the seasonal sound-speed profile (GDEM, `month`) and
+    Bathymetry, the seasonal sound-speed profile (`month`) and
     seabed parameters are fetched for the location automatically. Returns TL
     vs range at the receiver depths (default: source depth, 10 m, 100 m,
     mid-water), grid statistics, and the full replication bundle."""
@@ -468,7 +468,7 @@ async def run_transmission_loss(source_depth_m: float, frequency_hz: float, bear
                                                 "depth_m": [round(x, 1) for x in r["bathy"]["depth_m"]]},
                         "environment_run_id": r["env"]["run_id"], "environment_files": r["env"]["files"],
                         "note": "TL grid sentinel 999 = below seafloor. Re-run with any PE code using these inputs."},
-        "provenance": _prov("RAM parabolic equation (Clairwave backend) with GEBCO 2025 bathymetry, GDEM v3 SSP, seabed lithology",
+        "provenance": _prov("RAM parabolic equation (Clairwave backend) with Clairwave-served bathymetry, seasonal SSP and seabed parameters",
                             environment_run_id=r["env"]["run_id"]),
     }
 
@@ -517,7 +517,7 @@ async def estimate_detection_range(source_depth_m: float, frequency_hz: float, s
         "method": "RAM PE transmission loss + sonar equation SE = SL - TL - NL - DT",
         "replication": {"ssp": r["env"]["ssp"], "bottom": r["env"]["bottom"],
                         "environment_run_id": r["env"]["run_id"], "grid": {"shape": res["shape"], "r_range_m": res["r_range"], "z_range_m": res["z_range"]}},
-        "provenance": _prov("RAM PE + GEBCO 2025 + GDEM v3 + seabed lithology", environment_run_id=r["env"]["run_id"]),
+        "provenance": _prov("RAM PE + Clairwave-served environment (bathymetry, SSP, seabed)", environment_run_id=r["env"]["run_id"]),
     }
 
 
@@ -547,7 +547,7 @@ async def run_bellhop_volume(lat: float | None = None, lon: float | None = None,
             "files": {"json": f"{SITE}/public/{res['json_file']}", "npy": f"{SITE}/public/{res['npy_file']}",
                       "bathy_npy": f"{SITE}/public/{run_id}_bathy.npy"},
             "decode": "npy is uint8 TL scaled between dbMin..dbMax over (Ntheta, Nr, Nz); *_bathy.npy uint8 depth = v/255*radial_bathy.scale_depth_m",
-            "provenance": _prov("Bellhop 3D (Clairwave) + GEBCO 2025 + GDEM v3 + seabed lithology", run_id=run_id)}
+            "provenance": _prov("Bellhop 3D (Clairwave) + Clairwave-served environment (bathymetry, SSP, seabed)", run_id=run_id)}
 
 
 # ── Vessels ──────────────────────────────────────────────────────────────────
@@ -634,7 +634,7 @@ async def vessel_source_level(mmsi: str | None = None, ship_type: int | None = N
     """Radiated-noise source level of a ship (dB re 1 uPa @ 1 m): broadband,
     third-octave spectrum (ISO centres 10 Hz - 100 kHz) and the mechanism
     breakdown (cavitation, machinery, flow, blade-rate tonals), from
-    Clairwave's ECHO/RANDI-class model (Wales-Heitmeyer cavitation spectrum).
+    Clairwave's class-based ship-noise model (cavitation spectrum + machinery + flow + tonals).
     Give an MMSI (live AIS particulars are used) or explicit type / speed /
     dimensions. The spectrum is usable directly as `sl_spectrum` input."""
     live = None
@@ -654,7 +654,7 @@ async def vessel_source_level(mmsi: str | None = None, ship_type: int | None = N
     r["inputs"] = {"mmsi": mmsi, "ship_type": ship_type, "speed_kn": speed_kn, "length_m": length_m,
                    "beam_m": beam_m, "draft_m": draft_m, "vessel_name": (live or {}).get("name")}
     r["units"] = "dB re 1 uPa @ 1 m; spectrum = third-octave band levels at centre frequencies (Hz)"
-    r["provenance"] = _prov("Clairwave ship-noise model (ECHO/RANDI class params, Wales-Heitmeyer cavitation + machinery + flow + tonals)")
+    r["provenance"] = _prov("Clairwave ship-noise model (class-based cavitation + machinery + flow + tonals)")
     return r
 
 
@@ -677,9 +677,9 @@ async def about() -> dict:
         "platform": SITE,
         "models": {"transmission_loss": "RAM parabolic equation (CPU, typically < 3 s per bearing)",
                    "volume": "Bellhop 3D ray/beam",
-                   "source_level": "Wales-Heitmeyer cavitation + machinery + flow noise"},
-        "data": {"bathymetry": "GEBCO 2025 (15 arc-sec)", "sound_speed": "GDEM v3 monthly climatology",
-                 "seabed": "lithology lookup -> cp, cs, density ratio, attenuation",
+                   "source_level": "class-based cavitation + machinery + flow noise"},
+        "data": {"bathymetry": "Clairwave-served global bathymetry (~450 m)", "sound_speed": "Clairwave-served seasonal climatology",
+                 "seabed": "Clairwave-served seabed parameters -> cp, cs, density ratio, attenuation",
                  "ais": "AISHub peer network + Clairwave VHF receivers", "models_3d": "shipshape (open, MMSI-keyed)"},
         "reproducibility": "simulation tools return the SSP, bottom parameters, bathymetry transect and grid used, plus an environment run id whose JSON sidecar is downloadable",
         "identity": ("premium service account (full solver set, no free-tier caps)" if MCP_CLIENT_ID else "anonymous (free tier caps apply)"),

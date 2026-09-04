@@ -27,12 +27,12 @@ used, so a researcher can replicate the run in MATLAB, Python or anything else.
 
 | Tool | What it does |
 |---|---|
-| `get_bathymetry` | GEBCO 2025 depth at a point, or a transect profile along a bearing |
-| `get_sound_speed_profile` | GDEM v3 seasonal c(z) for a month + seabed parameters (cp, cs, density, attenuation, sediment) |
+| `get_bathymetry` | Depth at a point, or a transect profile along a bearing |
+| `get_sound_speed_profile` | Seasonal c(z) for a month + seabed parameters (cp, cs, density, attenuation, sediment) |
 | `run_transmission_loss` | RAM parabolic-equation TL along a bearing; bathymetry/SSP/seabed fetched automatically; replication bundle included |
 | `estimate_detection_range` | Sonar equation on a RAM run: continuous and furthest detection range, signal excess vs range |
 | `run_bellhop_volume` | 3D Bellhop TL volume stored under a run id (uint8 cube + JSON sidecar links) |
-| `vessel_source_level` | Ship radiated noise: broadband + third-octave spectrum + mechanism breakdown (ECHO/RANDI-class model) |
+| `vessel_source_level` | Ship radiated noise: broadband + third-octave spectrum + mechanism breakdown |
 | `search_vessels` / `vessels_near` | Live AIS by name/MMSI, or within a radius of a point |
 | `get_vessel` | Live position/track, particulars, and the 3D model (GLB, bow=+Z) with platform links |
 | `get_vessel_photo` | Wikimedia Commons photo with attribution |
@@ -81,7 +81,7 @@ logic directly, with `offshore_km` to push a point further out.
 ## Limits and support
 
 - No sign-in. Compute calls share a platform-wide budget of about 20 per minute.
-- Simulations are climatology-based (GDEM monthly sound speed, GEBCO bathymetry) and are
+- Simulations are climatology-based (monthly sound speed, global bathymetry) and are
   not a substitute for in-situ measurements.
 - Privacy policy: [PRIVACY.md](PRIVACY.md). Support: contact@clairwave.com.
   Issues: https://github.com/clairwave/clairwave-mcp/issues
