@@ -66,8 +66,10 @@ mcp = FastMCP(
         "'transmission loss along bearing B', 'what ships are near X'. Location "
         "tools accept lat/lon OR a `place` name (port, strait, sea, 'off Halifax'); "
         "names resolve to a water point and the coordinates used are echoed back. Every "
-        "result includes provenance and a replication bundle — cite the model, "
-        "the data sources and the run id, and link `open_url` when present."
+        "result includes provenance and a replication bundle — cite the model and "
+        "the run id. Every simulation and vessel result carries `open_url`: ALWAYS "
+        "show it to the user as a clickable link — it opens that exact run (or "
+        "vessel) visualized in the Clairwave platform, no sign-in required."
     ),
     website_url="https://www.clairwave.com",
     icons=[Icon(src="https://raw.githubusercontent.com/clairwave/clairwave-mcp/master/icon.png", mimeType="image/png", sizes=["512x512"]),
@@ -170,6 +172,10 @@ async def _post(url: str, body: dict, timeout: float = 180) -> Any:
                 detail = r.text[:300]
             raise RuntimeError(f"{url.rsplit('/', 1)[-1]} -> HTTP {r.status_code}: {detail}")
         return r.json()
+
+
+OPEN_NOTE = "Opens this run visualized in Clairwave (3D transmission-loss volume with the environment used); no sign-in."
+ENV_NOTE = ("Opens the 3D environment run at this location in Clairwave (same sound speed, seabed and bathymetry the transmission-loss solve used); the bearing slice itself is computed on the fly and not stored.")
 
 
 def _prov(source: str, **extra) -> dict:
@@ -398,7 +404,8 @@ async def get_sound_speed_profile(month: int, lat: float | None = None, lon: flo
     parameters (compressional/shear speed, density ratio, attenuation,
     sediment type) at the same point. Cached per 0.1 degree."""
     env = await _environment(lat, lon, month)
-    return {"lat": lat, "lon": lon, **env}
+    return {"open_url": env["open_url"], "open_url_note": "Opens the environment run (sound speed, seabed, bathymetry) visualized in Clairwave; no sign-in.",
+            "lat": lat, "lon": lon, **env}
 
 
 # ── Propagation ──────────────────────────────────────────────────────────────
@@ -448,13 +455,15 @@ async def run_transmission_loss(source_depth_m: float, frequency_hz: float, bear
     Bathymetry, the seasonal sound-speed profile (`month`) and
     seabed parameters are fetched for the location automatically. Returns TL
     vs range at the receiver depths (default: source depth, 10 m, 100 m,
-    mid-water), grid statistics, and the full replication bundle."""
+    mid-water), grid statistics, and the full replication bundle. Show
+    `open_url` to the user as a clickable link."""
     rd = receiver_depths_m or sorted({float(source_depth_m), 10.0, 100.0})
     r = await _run_ram(lat, lon, source_depth_m, frequency_hz, bearing_deg, range_km, month)
     res, tl = r["res"], r["tl"]
     valid = tl[tl < 998]
     curves = _sample(tl, res["r_range"], res["z_range"], rd)
     return {
+        "open_url": r["env"]["open_url"], "open_url_note": ENV_NOTE,
         "inputs": {"lat": lat, "lon": lon, "source_depth_m": source_depth_m, "frequency_hz": frequency_hz,
                    "bearing_deg": bearing_deg, "range_km": range_km, "month": month},
         "method": res.get("method", "ram"), "solver_meta": res.get("meta"),
@@ -504,6 +513,7 @@ async def estimate_detection_range(source_depth_m: float, frequency_hz: float, s
     last_ok = float(rs[np.where(ok)[0][-1]]) if ok.any() else 0.0
     idx = np.unique(np.linspace(0, nr - 1, min(40, nr)).astype(int))
     return {
+        "open_url": r["env"]["open_url"], "open_url_note": ENV_NOTE,
         "inputs": {"lat": lat, "lon": lon, "source_depth_m": source_depth_m, "frequency_hz": frequency_hz,
                    "source_level_db": source_level_db, "receiver_depth_m": receiver_depth_m,
                    "noise_level_db": noise_level_db, "detection_threshold_db": detection_threshold_db,
@@ -528,7 +538,8 @@ async def run_bellhop_volume(lat: float | None = None, lon: float | None = None,
                              source_depth_m: float = 20, frequency_hz: float = 200,
                              radius_km: float = 10, month: int = 6) -> dict:
     """Full 3D transmission-loss volume around a source (lat/lon or `place`)
-    with Bellhop (all bearings), stored on the platform under a run id. Returns the run id,
+    with Bellhop (all bearings), stored on the platform under a run id. Show
+    `open_url` to the user as a clickable link: it opens this run visualized. Returns the run id,
     the replication metadata (SSP, seabed, bounding box) and file links
     (uint8 TL cube .npy + JSON sidecar). Runs with the server's premium
     identity, so frequency and radius are not free-tier capped (keep radius
@@ -542,7 +553,7 @@ async def run_bellhop_volume(lat: float | None = None, lon: float | None = None,
                                      "ssp_type", "max_depth", "bounding_box_center", "bounding_box_x",
                                      "bounding_box_y", "bounding_box_z", "bounding_box_r",
                                      "bounding_box_center_bot_prm", "radial_bathy", "lat1", "lat2", "long1", "long2")}
-    return {"run_id": run_id, "open_url": f"{SITE}/demo?guest=1&run={run_id}",
+    return {"open_url": f"{SITE}/demo?guest=1&run={run_id}", "open_url_note": OPEN_NOTE, "run_id": run_id,
             "metadata": keep, "ssp": meta.get("ssp"),
             "files": {"json": f"{SITE}/public/{res['json_file']}", "npy": f"{SITE}/public/{res['npy_file']}",
                       "bathy_npy": f"{SITE}/public/{run_id}_bathy.npy"},
@@ -620,7 +631,8 @@ async def get_vessel(mmsi: str) -> dict:
         out["model"] = r
     except Exception:
         out["model"] = None
-    out["open_url"] = f"{SITE}/demo?guest=1&mmsi={mmsi}"
+    out = {"open_url": f"{SITE}/demo?guest=1&mmsi={mmsi}",
+           "open_url_note": "Opens this vessel in Clairwave with its 3D model preview; no sign-in.", **out}
     out["fleet_url"] = f"{SITE}/fleet/?q={mmsi}"
     out["provenance"] = _prov("AIS live/static data; shipshape model database (github.com/clairwave/shipshape)")
     return out
