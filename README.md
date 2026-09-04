@@ -87,26 +87,6 @@ logic directly, with `offshore_km` to push a point further out.
 - Privacy policy: [PRIVACY.md](PRIVACY.md). Support: contact@clairwave.com.
   Issues: https://github.com/clairwave/clairwave-mcp/issues
 
-## Backend identity and analytics
-
-The MCP endpoint itself is open (no caller auth). The server calls the Clairwave
-API as a dedicated Keycloak service account (`clairwave-mcp`, client-credentials
-grant, realm role `premium`), so every caller gets the full solver set without
-free-tier caps, and all MCP traffic is attributed to one identity in the
-platform logs. Configure it with two environment variables (see `.env.example`);
-without them the server still works, calling the platform anonymously.
-
-Every tool call is appended to `analytics.jsonl` (tool, arguments, latency,
-MCP client name/version from the initialize handshake, source IP). Summarise with:
-
-```
-python mcp_stats.py analytics.jsonl --days 7
-```
-
-Per-caller authentication (MCP OAuth mapped to Clairwave accounts and tiers) is
-the planned path for paid usage; the service-account identity stays as the
-default for anonymous callers.
-
 ## License
 
 MIT. Data: AIS via the AISHub peer network (Clairwave contributes receivers);

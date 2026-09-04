@@ -11,7 +11,7 @@ replication bundle (bathymetry profile, SSP, bottom parameters, grid) so a
 researcher can reproduce the run in MATLAB / Python.
 
 Open by design: no caller auth, https://www.clairwave.com/mcp (Streamable HTTP).
-The server calls the platform as a premium Keycloak service account (see _bearer).
+The server may carry its own platform credentials (see _bearer).
 Local: `python server.py --stdio`.
 """
 import base64
@@ -41,11 +41,8 @@ SITE = os.environ.get("CLAIRWAVE_SITE", "https://www.clairwave.com")
 UA = {"User-Agent": "clairwave-mcp/0.3 (+https://www.clairwave.com)"}
 
 # ── Backend identity ─────────────────────────────────────────────────────────
-# The MCP endpoint stays open (no caller auth), but the server itself talks to
-# the platform as a dedicated Keycloak service account (client_credentials,
-# realm role premium -> `tier` claim). Callers therefore get the full solver
-# set with no free-tier caps, and every backend log line / run is attributed to
-# this identity. Without credentials the server falls back to anonymous calls.
+# Optional service credentials for the server's own platform calls (OAuth
+# client-credentials). Without them the server calls the platform anonymously.
 KC_TOKEN_URL = os.environ.get("CW_KC_TOKEN_URL", f"{SITE}/auth/realms/clairwave/protocol/openid-connect/token")
 MCP_CLIENT_ID = os.environ.get("CW_MCP_CLIENT_ID")
 MCP_CLIENT_SECRET = os.environ.get("CW_MCP_CLIENT_SECRET")
