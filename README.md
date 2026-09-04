@@ -37,6 +37,7 @@ used, so a researcher can replicate the run in MATLAB, Python or anything else.
 | `get_vessel` | Live position/track, particulars, and the 3D model (GLB, bow=+Z) with platform links |
 | `get_vessel_photo` | Wikimedia Commons photo with attribution |
 | `resolve_place` | Place name (port, strait, sea, 'off Halifax') → water coordinates; gazetteer + OpenStreetMap, snapped seaward off land |
+| `habitat_received_level` | Power-summed vessel noise at a fixed site (fish farm, reef, hydrophone): live snapshot or 10-minute history series; top contributors |
 | `about` | Models, data sources, limits |
 
 Typical latency against the live platform: bathymetry 0.5 s, SSP 6 s first time

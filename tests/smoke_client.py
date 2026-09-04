@@ -23,6 +23,7 @@ CALLS = [
     ("vessels_near", {**GIB, "radius_km": 15, "limit": 3}),
     ("vessel_source_level", {"ship_type": 70, "speed_kn": 12, "length_m": 200, "beam_m": 30, "draft_m": 9}),
     ("get_vessel", {"mmsi": "636018938"}),
+    ("habitat_received_level", {"place": "Halifax approaches", "max_range_km": 30, "top": 3}),
 ]
 
 

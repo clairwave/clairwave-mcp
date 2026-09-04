@@ -679,6 +679,91 @@ async def get_vessel_photo(imo: int | None = None, mmsi: str | None = None, name
     return r
 
 
+
+# ── Habitat noise: power-summed received level from live / recent traffic ────
+# Port of the platform's Habitat panel model (clairwave-gui shipNoise.ts):
+# per-vessel broadband SL from AIS class/speed/size, fast broadband TL
+# (practical spreading 15 log R + mild absorption), power sum at the site.
+
+def _fast_tl(range_m: float) -> float:
+    r = max(50.0, range_m)
+    return 15.0 * math.log10(r) + 0.05 * (r / 1000.0)
+
+
+def _habitat_sum(lat: float, lon: float, vessels: list[dict], max_range_m: float) -> tuple[float | None, list[dict]]:
+    power, contribs = 0.0, []
+    for v in vessels:
+        try:
+            vlat, vlon = float(v["lat"]), float(v["lon"])
+        except Exception:
+            continue
+        r = _haversine_km(lat, lon, vlat, vlon) * 1000.0
+        if r > max_range_m:
+            continue
+        sog = float(v.get("sog") or 0)
+        sl = quick_broadband_sl(int(v.get("type") or 0), sog, float(v.get("length") or 0), float(v.get("draft") or 0))
+        rl = sl - _fast_tl(r)
+        power += 10 ** (rl / 10)
+        contribs.append({"mmsi": str(v.get("mmsi")), "name": v.get("name") or f"MMSI {v.get('mmsi')}",
+                         "type": v.get("type"), "sog_kn": round(sog, 1), "range_km": round(r / 1000, 2),
+                         "sl_db": round(sl, 1), "rl_db": round(rl, 1)})
+    contribs.sort(key=lambda c: -c["rl_db"])
+    return (round(10 * math.log10(power), 1) if power > 0 else None), contribs
+
+
+@mcp.tool(title="Habitat received level (vessel noise)", annotations=ToolAnnotations(title="Habitat received level (vessel noise)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+@logged
+@placed
+async def habitat_received_level(lat: float | None = None, lon: float | None = None, place: str | None = None,
+                                 max_range_km: float = 30.0, hours_back: float = 0, top: int = 10) -> dict:
+    """Broadband received level (dB re 1 uPa) at a fixed site — a fish farm,
+    reef, hydrophone or marine protected area — from the ships around it,
+    power-summed. Each vessel's source level comes from its AIS class, speed
+    and size; transmission loss is a fast broadband model, so this is a
+    screening estimate (use run_transmission_loss for exact site physics).
+    hours_back = 0 uses the live snapshot; > 0 reconstructs a time series from
+    the AIS archive in 10-minute bins (max/median/quiet levels). Location:
+    lat/lon or `place`. Show `open_url` to the user as a clickable link."""
+    max_range_m = max_range_km * 1000.0
+    b = _bbox(lat, lon, max_range_km)
+    out: dict = {"open_url": f"{SITE}/demo?guest=1&mmsi=", "site": {"lat": lat, "lon": lon},
+                 "max_range_km": max_range_km,
+                 "method": "power sum of per-vessel RL = SL(class, speed, size) - TL_fast(15 log R + 0.05 dB/km); screening model"}
+    if hours_back and hours_back > 0:
+        to_ts = int(time.time())
+        d = await _get(f"{API}/ais_live/history", **b, **{"from": to_ts - int(hours_back * 3600), "to": to_ts, "max": 120000})
+        tracks, statics = d.get("tracks") or {}, d.get("static") or {}
+        bins: dict[int, dict[str, dict]] = {}
+        for mmsi, pts in tracks.items():
+            st = statics.get(mmsi) or {}
+            for pt in pts:
+                k = int(pt["ts"] // 600) * 600
+                bins.setdefault(k, {})[mmsi] = {"mmsi": mmsi, "lat": pt["lat"], "lon": pt["lon"], "sog": pt.get("sog"),
+                                                "type": st.get("type", 0), "length": st.get("length", 0),
+                                                "draft": st.get("draft", 0), "name": st.get("name")}
+        series = []
+        for k in sorted(bins):
+            vs = [v for v in bins[k].values() if (v.get("sog") or 0) > 0.3]
+            total, c = _habitat_sum(lat, lon, vs, max_range_m)
+            series.append({"t": _dt.datetime.fromtimestamp(k, _dt.timezone.utc).isoformat(timespec="minutes"),
+                           "rl_db": total, "n_vessels": len(c)})
+        vals = sorted(x["rl_db"] for x in series if x["rl_db"] is not None)
+        out.update({"mode": "history", "hours_back": hours_back, "bins_10min": len(series),
+                    "vessels_seen": d.get("vessels", len(tracks)),
+                    "stats": ({"max_db": vals[-1], "median_db": vals[len(vals) // 2], "quietest_db": vals[0],
+                               "bins_with_traffic": len(vals)} if vals else None),
+                    "series": series[-144:]})
+        out["open_url"] = f"{SITE}/demo?guest=1"
+    else:
+        d = await _get(f"{API}/ais_live/area", **b)
+        total, contribs = _habitat_sum(lat, lon, d.get("vessels", []), max_range_m)
+        out.update({"mode": "live", "received_level_db": total, "n_vessels_in_range": len(contribs),
+                    "contributors": contribs[:max(1, min(top, 50))]})
+        out["open_url"] = (f"{SITE}/demo?guest=1&mmsi={contribs[0]['mmsi']}" if contribs else f"{SITE}/demo?guest=1")
+    out["open_url_note"] = "Opens Clairwave (loudest contributor selected when live); the Habitat panel there runs the same model with live monitoring."
+    out["provenance"] = _prov("Clairwave habitat noise model (AIS live/archive + class-based source levels + fast broadband TL)")
+    return out
+
 # ── Discovery ────────────────────────────────────────────────────────────────
 
 @mcp.tool(title="About Clairwave", annotations=ToolAnnotations(title="About Clairwave", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
