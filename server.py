@@ -43,7 +43,7 @@ UA = {"User-Agent": "clairwave-mcp/0.3 (+https://www.clairwave.com)"}
 # ── Backend identity ─────────────────────────────────────────────────────────
 # Optional service credentials for the server's own platform calls (OAuth
 # client-credentials). Without them the server calls the platform anonymously.
-KC_TOKEN_URL = os.environ.get("CW_KC_TOKEN_URL", f"{SITE}/auth/realms/clairwave/protocol/openid-connect/token")
+KC_TOKEN_URL = os.environ.get("CW_KC_TOKEN_URL", "")
 MCP_CLIENT_ID = os.environ.get("CW_MCP_CLIENT_ID")
 MCP_CLIENT_SECRET = os.environ.get("CW_MCP_CLIENT_SECRET")
 _TOKEN: dict = {"value": None, "exp": 0.0, "tier": None}
@@ -90,7 +90,7 @@ def _jwt_claims(tok: str) -> dict:
 
 async def _bearer(url: str) -> dict:
     """Authorization header for platform API calls (cached service-account token)."""
-    if not (MCP_CLIENT_ID and MCP_CLIENT_SECRET) or not url.startswith(API):
+    if not (MCP_CLIENT_ID and MCP_CLIENT_SECRET and KC_TOKEN_URL) or not url.startswith(API):
         return {}
     if _TOKEN["value"] and time.time() < _TOKEN["exp"] - 30:
         return {"Authorization": f"Bearer {_TOKEN['value']}"}
@@ -538,8 +538,7 @@ async def run_bellhop_volume(lat: float | None = None, lon: float | None = None,
     with Bellhop (all bearings), stored on the platform under a run id. Show
     `open_url` to the user as a clickable link: it opens this run visualized. Returns the run id,
     the replication metadata (SSP, seabed, bounding box) and file links
-    (uint8 TL cube .npy + JSON sidecar). Runs with the server's premium
-    identity, so frequency and radius are not free-tier capped (keep radius
+    (uint8 TL cube .npy + JSON sidecar). Any frequency and radius (keep radius
     <= ~50 km for reasonable run times)."""
     body = {"src_lat": lat, "src_lon": lon, "src_radius_km": radius_km, "month": int(month),
             "center_frequency": float(frequency_hz), "input_depth": int(source_depth_m), "timing": False}
@@ -776,7 +775,6 @@ async def about() -> dict:
                  "seabed": "Clairwave-served seabed parameters -> cp, cs, density ratio, attenuation",
                  "ais": "AISHub peer network + Clairwave VHF receivers", "models_3d": "shipshape (open, MMSI-keyed)"},
         "reproducibility": "simulation tools return the SSP, bottom parameters, bathymetry transect and grid used, plus an environment run id whose JSON sidecar is downloadable",
-        "identity": ("premium service account (full solver set, no free-tier caps)" if MCP_CLIENT_ID else "anonymous (free tier caps apply)"),
         "limits": "shared ~20 compute calls/min across all MCP callers; no per-caller auth required",
         "open_source": {"shipshape": "https://github.com/clairwave/shipshape",
                         "mcp_server": "https://github.com/clairwave/clairwave-mcp"},
