@@ -1,6 +1,6 @@
-"""Ship radiated-noise source-level model — faithful port of Clairwave's
-ShipNoiseModel.ts (ECHO/RANDI-style class parameters; Wales-Heitmeyer
-cavitation spectrum + machinery + hydrodynamic flow + blade-rate tonals).
+"""Ship radiated-noise source-level model — port of Clairwave's ShipNoiseModel.ts
+(class-based parameters; cavitation spectrum + machinery + hydrodynamic flow +
+blade-rate tonals).
 Units: dB re 1 uPa @ 1 m; third-octave band levels at ISO centre frequencies.
 """
 import math
@@ -40,7 +40,7 @@ CLASS_PARAMS = {
 }
 
 
-def _wales_heitmeyer(fc: float, peak_hz: float) -> float:
+def _cavitation_spectrum(fc: float, peak_hz: float) -> float:
     ratio = fc / peak_hz
     log_ratio = math.log2(ratio)
     if ratio <= 1:
@@ -51,7 +51,7 @@ def _wales_heitmeyer(fc: float, peak_hz: float) -> float:
     return sl_at_1k - 12.0 * math.log2(fc / 1000)
 
 
-def _cavitation(fc, peak_hz, bb): return bb + _wales_heitmeyer(fc, peak_hz)
+def _cavitation(fc, peak_hz, bb): return bb + _cavitation_spectrum(fc, peak_hz)
 
 
 def _machinery(fc, bb, offset):
@@ -75,7 +75,7 @@ def _tonals(fc, sog, blade_count, rpm_range, bb):
     tone = -999.0
     for i, h in enumerate((blade_rate, blade_rate * 2, blade_rate * 3)):
         if lo <= h <= hi:
-            tone = max(tone, bb - 6 + _wales_heitmeyer(h, 63) - i * 6)
+            tone = max(tone, bb - 6 + _cavitation_spectrum(h, 63) - i * 6)
     return tone
 
 
