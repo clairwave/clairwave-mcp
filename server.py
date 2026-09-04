@@ -27,7 +27,7 @@ from typing import Any
 import httpx
 import numpy as np
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from mcp.types import Icon, ToolAnnotations
 
 from gazetteer import lookup as gazetteer_lookup
 from shipnoise import compute_source_level, quick_broadband_sl
@@ -69,6 +69,9 @@ mcp = FastMCP(
         "result includes provenance and a replication bundle — cite the model, "
         "the data sources and the run id, and link `open_url` when present."
     ),
+    website_url="https://www.clairwave.com",
+    icons=[Icon(src="https://raw.githubusercontent.com/clairwave/clairwave-mcp/master/icon.png", mimeType="image/png", sizes=["512x512"]),
+           Icon(src="https://www.clairwave.com/apple-touch-icon.png", mimeType="image/png", sizes=["180x180"])],
     host="0.0.0.0",
     port=int(os.environ.get("MCP_PORT", "8890")),
     stateless_http=True,
@@ -565,18 +568,32 @@ async def vessels_near(lat: float | None = None, lon: float | None = None, place
                        radius_km: float = 25.0, limit: int = 30) -> dict:
     """Live AIS vessels within radius_km of a point (lat/lon or `place`), nearest first, with
     position, course/speed, type, dimensions and last-update time."""
-    b = _bbox(lat, lon, radius_km)
-    d = await _get(f"{API}/ais_live/area", **b)
-    out = []
-    for v in d.get("vessels", []):
-        try:
-            dist = _haversine_km(lat, lon, float(v["lat"]), float(v["lon"]))
-        except Exception:
-            continue
-        if dist <= radius_km:
-            out.append({**v, "distance_km": round(dist, 2), "open_url": f"{SITE}/demo?guest=1&mmsi={v.get('mmsi')}"})
-    out.sort(key=lambda x: x["distance_km"])
-    return {"center": {"lat": lat, "lon": lon}, "radius_km": radius_km, "count": len(out),
+    async def _within(rk: float) -> list[dict]:
+        d = await _get(f"{API}/ais_live/area", **_bbox(lat, lon, rk))
+        found = []
+        for v in d.get("vessels", []):
+            try:
+                dist = _haversine_km(lat, lon, float(v["lat"]), float(v["lon"]))
+            except Exception:
+                continue
+            if dist <= rk:
+                found.append({**v, "distance_km": round(dist, 2), "open_url": f"{SITE}/demo?guest=1&mmsi={v.get('mmsi')}"})
+        found.sort(key=lambda x: x["distance_km"])
+        return found
+
+    out = await _within(radius_km)
+    note = None
+    radius_used = radius_km
+    if not out:
+        # Live coverage is receiver-based (AISHub peers): open water like the middle of a
+        # strait can be empty while the nearby anchorages are dense. Widen once so the
+        # caller gets the nearest traffic instead of a bare zero.
+        radius_used = min(radius_km * 4, 250.0)
+        out = await _within(radius_used)
+        note = (f"no vessels within {radius_km:g} km; widened to {radius_used:g} km"
+                + (f", nearest at {out[0]['distance_km']} km" if out else ", still none: no live coverage here"))
+    return {"center": {"lat": lat, "lon": lon}, "radius_km": radius_km, "radius_used_km": radius_used,
+            "note": note, "count": len(out),
             "vessels": out[:max(1, min(limit, 200))],
             "provenance": _prov("AIS live feed (AISHub peer network + Clairwave VHF receivers)")}
 
