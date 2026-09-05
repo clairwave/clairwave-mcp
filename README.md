@@ -84,7 +84,7 @@ logic directly, with `offshore_km` to push a point further out.
 - No sign-in. Compute calls share a platform-wide budget of about 20 per minute.
 - Simulations are climatology-based (monthly sound speed, global bathymetry) and are
   not a substitute for in-situ measurements.
-- Privacy policy: [PRIVACY.md](PRIVACY.md). Support: contact@clairwave.com.
+- Privacy policy: [PRIVACY.md](PRIVACY.md). Terms: [TERMS.md](TERMS.md). Support: contact@clairwave.com.
   Issues: https://github.com/clairwave/clairwave-mcp/issues
 
 ## License
