@@ -24,6 +24,9 @@ import sys
 import time
 from typing import Any
 
+from pydantic import ConfigDict, Field
+from typing_extensions import Annotated, NotRequired, TypedDict
+
 import httpx
 import numpy as np
 from mcp.server.fastmcp import FastMCP
@@ -76,6 +79,200 @@ mcp = FastMCP(
     stateless_http=True,
     json_response=True,
 )
+
+
+
+# ── Output schemas ───────────────────────────────────────────────────────────
+# Declared return types give every tool an outputSchema (and structuredContent)
+# so clients can reason about results. Keys are documented but optional and
+# extra keys are allowed, so the schema never rejects a valid response.
+
+_EXTRA = ConfigDict(extra="allow")
+
+
+def _f(desc: str):
+    return Field(description=desc)
+
+
+class LocationInfo(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    query: Annotated[str | None, _f("place name as given")]
+    matched: Annotated[str | None, _f("gazetteer key or OpenStreetMap display name that matched")]
+    lat: Annotated[float | None, _f("latitude used, decimal degrees N")]
+    lon: Annotated[float | None, _f("longitude used, decimal degrees E")]
+    depth_m: Annotated[float | None, _f("water depth at the point, metres (positive down)")]
+    source: Annotated[str | None, _f("gazetteer:exact | gazetteer:contains | gazetteer:fuzzy | nominatim (OpenStreetMap)")]
+    seaward_bearing_deg: Annotated[float | None, _f("compass bearing that leads further to sea")]
+    snapped_to_water: Annotated[bool | None, _f("true if the original point was on land/shallow and was moved seaward")]
+    original: Annotated[Any | None, _f("original lat/lon/depth before the snap")]
+    snap: Annotated[Any | None, _f("bearing_deg and distance_km of the seaward walk")]
+    offshore_km: Annotated[float | None, _f("offset applied along the seaward bearing")]
+    provenance: Annotated[Any | None, _f("provider/source notes")]
+
+
+class PlaceResult(LocationInfo):
+    pass
+
+
+class BathymetryResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    lat: float | None
+    lon: float | None
+    depth_m: Annotated[float | None, _f("depth at the point, metres (point mode)")]
+    bearing_deg: Annotated[float | None, _f("transect bearing (transect mode)")]
+    range_km: float | None
+    profile: Annotated[list[Any] | None, _f("[{r_m, depth_m}, ...] along the bearing (transect mode)")]
+    min_depth_m: float | None
+    max_depth_m: float | None
+    location: Annotated[LocationInfo | None, _f("present when `place` was used")]
+    provenance: Any | None
+
+
+class SoundSpeedResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    open_url: Annotated[str | None, _f("opens the environment run in the Clairwave platform, no sign-in")]
+    open_url_note: str | None
+    lat: float | None
+    lon: float | None
+    run_id: Annotated[str | None, _f("environment run id (files retrievable under /public/<run_id>.*)")]
+    month: int | None
+    ssp: Annotated[Any | None, _f("{depth_m: [...], c_m_s: [...]} sound-speed profile")]
+    bottom: Annotated[Any | None, _f("cp_m_s, cs_m_s, rho_ratio, alpha_p_dB_per_lambda, alpha_s_dB_per_lambda, sediment")]
+    bottom_params_raw: Any | None
+    max_depth_m: Any | None
+    files: Annotated[Any | None, _f("json / npy / bathy_npy download URLs")]
+    location: LocationInfo | None
+    provenance: Any | None
+
+
+class TransmissionLossResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    open_url: str | None
+    open_url_note: str | None
+    inputs: Annotated[Any | None, _f("echo of lat, lon, source depth, frequency, bearing, range, month")]
+    method: str | None
+    solver_meta: Any | None
+    grid: Annotated[Any | None, _f("shape_Nr_Nz, r_range_m, z_range_m")]
+    tl_vs_range: Annotated[Any | None, _f("{range_m: [...], tl_db: {'<depth>m': [...]}} transmission loss in dB; null = below seafloor")]
+    stats: Annotated[Any | None, _f("tl_min_db, tl_max_db, elapsed_s, wall_s")]
+    replication: Annotated[Any | None, _f("ssp, bottom, bathymetry_transect, environment_run_id, environment_files")]
+    location: LocationInfo | None
+    provenance: Any | None
+
+
+class DetectionRangeResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    open_url: str | None
+    open_url_note: str | None
+    inputs: Any | None
+    method: str | None
+    source_level_db: float | None
+    noise_level_db: float | None
+    bearing_deg: float | None
+    se_db: Annotated[Any | None, _f("signal excess summary")]
+    signal_excess_vs_range: Annotated[Any | None, _f("SE = SL - TL - NL - DT sampled along range")]
+    continuous_detection_range_km: Annotated[float | None, _f("range at which SE first drops below zero")]
+    furthest_detectable_range_km: Annotated[float | None, _f("last range with SE >= 0 within max_range_km")]
+    detectable_fraction_of_track: float | None
+    receiver_below_seafloor_fraction: float | None
+    environment_run_id: str | None
+    replication: Any | None
+    location: LocationInfo | None
+    provenance: Any | None
+
+
+class VolumeRunResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    open_url: Annotated[str | None, _f("opens this run visualized in the Clairwave platform, no sign-in")]
+    open_url_note: str | None
+    run_id: str | None
+    metadata: Annotated[Any | None, _f("month, input_depth, center_frequency, dbMin/dbMax, bounding box, radial bathymetry")]
+    ssp: Any | None
+    files: Annotated[Any | None, _f("json / npy / bathy_npy download URLs")]
+    decode: Annotated[str | None, _f("how to decode the uint8 TL cube")]
+    location: LocationInfo | None
+    provenance: Any | None
+
+
+class VesselSearchResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    results: Annotated[list[Any] | None, _f("AIS records: mmsi, name, lat, lon, cog, sog, type, length, beam, lastUpdate, open_url")]
+    provenance: Any | None
+
+
+class VesselsNearResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    center: Any | None
+    radius_km: float | None
+    radius_used_km: Annotated[float | None, _f("radius actually used (widened once if the requested radius was empty)")]
+    note: str | None
+    count: int | None
+    vessels: Annotated[list[Any] | None, _f("nearest first; each has distance_km and open_url")]
+    location: LocationInfo | None
+    provenance: Any | None
+
+
+class VesselResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    open_url: str | None
+    open_url_note: str | None
+    mmsi: str | None
+    live: Annotated[Any | None, _f("latest AIS record")]
+    track_recent: Any | None
+    model: Annotated[Any | None, _f("3D model status from the shipshape fleet (unique or archetype)")]
+    model_glb_url: str | None
+    fleet_url: str | None
+    provenance: Any | None
+
+
+class SourceLevelResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    inputs: Any | None
+    broadband_sl_db: Annotated[float | None, _f("broadband source level, dB re 1 uPa @ 1 m (platform figure)")]
+    spectrum_integrated_sl_db: Annotated[float | None, _f("third-octave spectrum integrated level")]
+    spectrum: Annotated[list[Any] | None, _f("third-octave bands: fc, sl, cavitation, machinery, flow, tonals")]
+    mechanisms_db: Any | None
+    ship_class: str | None
+    effective_params: Any | None
+    beam_m: Any | None
+    units: str | None
+    note: str | None
+    provenance: Any | None
+
+
+class VesselPhotoResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    provenance: Any | None
+
+
+class HabitatResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    open_url: str | None
+    open_url_note: str | None
+    site: Any | None
+    max_range_km: float | None
+    method: str | None
+    mode: Annotated[str | None, _f("live | history")]
+    received_level_db: Annotated[float | None, _f("power-summed broadband RL at the site (live mode)")]
+    n_vessels_in_range: int | None
+    contributors: Annotated[list[Any] | None, _f("loudest first: mmsi, name, type, sog_kn, range_km, sl_db, rl_db")]
+    hours_back: float | None
+    bins_10min: int | None
+    vessels_seen: Any | None
+    stats: Annotated[Any | None, _f("max_db, median_db, quietest_db, bins_with_traffic (history mode)")]
+    series: Annotated[list[Any] | None, _f("[{t, rl_db, n_vessels}, ...] 10-minute bins (history mode)")]
+    location: LocationInfo | None
+    provenance: Any | None
+
+
+class AboutResult(TypedDict, total=False):
+    __pydantic_config__ = _EXTRA
+    platform: str | None
+    models: Any | None
+    data: Any | None
+    reproducibility: str | None
+    limits: str | None
+    open_source: Any | None
 
 
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -320,7 +517,7 @@ def placed(fn):
 @mcp.tool(title="Resolve place name", annotations=ToolAnnotations(title="Resolve place name", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
 async def resolve_place(place: str, seaward_bearing_deg: float | None = None, offshore_km: float | None = None,
-                        min_depth_m: float = 10.0) -> dict:
+                        min_depth_m: float = 10.0) -> PlaceResult:
     """Turn a place name ('outside Halifax', 'Strait of Hormuz', 'Bergen,
     Norway') into water coordinates. Maritime gazetteer first (ports resolve
     to their approaches, straits/seas to a representative point), then
@@ -336,7 +533,7 @@ async def resolve_place(place: str, seaward_bearing_deg: float | None = None, of
 @logged
 @placed
 async def get_bathymetry(lat: float | None = None, lon: float | None = None, place: str | None = None,
-                         bearing_deg: float | None = None, range_km: float = 20.0, n_points: int = 100) -> dict:
+                         bearing_deg: float | None = None, range_km: float = 20.0, n_points: int = 100) -> BathymetryResult:
     """Seafloor depth from Clairwave-served global bathymetry (~450 m resolution). Location:
     lat/lon or `place` (name resolved to a water point, echoed in `location`).
     Without a bearing: depth at the point. With a bearing (compass degrees,
@@ -394,7 +591,7 @@ async def _environment(lat: float, lon: float, month: int) -> dict:
 @logged
 @placed
 async def get_sound_speed_profile(month: int, lat: float | None = None, lon: float | None = None,
-                                  place: str | None = None) -> dict:
+                                  place: str | None = None) -> SoundSpeedResult:
     """Seasonal sound-speed profile c(z) at a location (lat/lon or `place`
     name, e.g. "Halifax approaches") for a calendar month
     (1-12), from Clairwave-served seasonal temperature/salinity climatology, plus the seabed
@@ -446,7 +643,7 @@ def _sample(tl: np.ndarray, r_range, z_range, receiver_depths, n_out=40) -> dict
 async def run_transmission_loss(source_depth_m: float, frequency_hz: float, bearing_deg: float,
                                 lat: float | None = None, lon: float | None = None, place: str | None = None,
                                 range_km: float = 20.0, month: int = 6,
-                                receiver_depths_m: list[float] | None = None) -> dict:
+                                receiver_depths_m: list[float] | None = None) -> TransmissionLossResult:
     """Run a physically grounded transmission-loss simulation (RAM parabolic
     equation) from a source at (lat, lon or `place`, depth) along a compass bearing.
     Bathymetry, the seasonal sound-speed profile (`month`) and
@@ -486,7 +683,7 @@ async def estimate_detection_range(source_depth_m: float, frequency_hz: float, s
                                    receiver_depth_m: float, noise_level_db: float,
                                    lat: float | None = None, lon: float | None = None, place: str | None = None,
                                    bearing_deg: float = 0.0, max_range_km: float = 40.0, month: int = 6,
-                                   detection_threshold_db: float = 0.0) -> dict:
+                                   detection_threshold_db: float = 0.0) -> DetectionRangeResult:
     """Location: lat/lon or `place` name. Passive sonar detection range along a bearing: runs a RAM transmission
     loss simulation for the location/season and applies the sonar equation
     SE = SL - TL - NL (- DT) at the receiver depth. Returns the first range
@@ -533,7 +730,7 @@ async def estimate_detection_range(source_depth_m: float, frequency_hz: float, s
 @placed
 async def run_bellhop_volume(lat: float | None = None, lon: float | None = None, place: str | None = None,
                              source_depth_m: float = 20, frequency_hz: float = 200,
-                             radius_km: float = 10, month: int = 6) -> dict:
+                             radius_km: float = 10, month: int = 6) -> VolumeRunResult:
     """Full 3D transmission-loss volume around a source (lat/lon or `place`)
     with Bellhop (all bearings), stored on the platform under a run id. Show
     `open_url` to the user as a clickable link: it opens this run visualized. Returns the run id,
@@ -561,7 +758,7 @@ async def run_bellhop_volume(lat: float | None = None, lon: float | None = None,
 
 @mcp.tool(title="Search vessels (AIS)", annotations=ToolAnnotations(title="Search vessels (AIS)", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
-async def search_vessels(query: str, limit: int = 8) -> dict:
+async def search_vessels(query: str, limit: int = 8) -> VesselSearchResult:
     """Search live AIS vessels by name or MMSI prefix (global feed)."""
     data = await _get(f"{API}/ais_live/search", q=query, limit=min(max(limit, 1), 25))
     results = [{**v, "open_url": f"{SITE}/demo?guest=1&mmsi={v.get('mmsi')}"} for v in data.get("results", [])]
@@ -572,7 +769,7 @@ async def search_vessels(query: str, limit: int = 8) -> dict:
 @logged
 @placed
 async def vessels_near(lat: float | None = None, lon: float | None = None, place: str | None = None,
-                       radius_km: float = 25.0, limit: int = 30) -> dict:
+                       radius_km: float = 25.0, limit: int = 30) -> VesselsNearResult:
     """Live AIS vessels within radius_km of a point (lat/lon or `place`), nearest first, with
     position, course/speed, type, dimensions and last-update time."""
     async def _within(rk: float) -> list[dict]:
@@ -607,7 +804,7 @@ async def vessels_near(lat: float | None = None, lon: float | None = None, place
 
 @mcp.tool(title="Vessel details + 3D model", annotations=ToolAnnotations(title="Vessel details + 3D model", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
-async def get_vessel(mmsi: str) -> dict:
+async def get_vessel(mmsi: str) -> VesselResult:
     """Everything about one vessel: live AIS position/track and static
     particulars, plus its 3D model (unique photo-derived model if generated,
     else the class archetype) with GLB URL (bow=+Z, up=+Y) and platform links."""
@@ -638,7 +835,7 @@ async def get_vessel(mmsi: str) -> dict:
 @logged
 async def vessel_source_level(mmsi: str | None = None, ship_type: int | None = None, speed_kn: float | None = None,
                               length_m: float | None = None, beam_m: float | None = None,
-                              draft_m: float | None = None) -> dict:
+                              draft_m: float | None = None) -> SourceLevelResult:
     """Radiated-noise source level of a ship (dB re 1 uPa @ 1 m): broadband,
     third-octave spectrum (ISO centres 10 Hz - 100 kHz) and the mechanism
     breakdown (cavitation, machinery, flow, blade-rate tonals), from
@@ -668,7 +865,7 @@ async def vessel_source_level(mmsi: str | None = None, ship_type: int | None = N
 
 @mcp.tool(title="Vessel photo", annotations=ToolAnnotations(title="Vessel photo", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
-async def get_vessel_photo(imo: int | None = None, mmsi: str | None = None, name: str | None = None) -> dict:
+async def get_vessel_photo(imo: int | None = None, mmsi: str | None = None, name: str | None = None) -> VesselPhotoResult:
     """Photograph of a vessel from Wikimedia Commons, with attribution."""
     r = await _get(f"{API}/vessel_photo", imo=imo, mmsi=mmsi, name=name)
     r["provenance"] = _prov("Wikimedia Commons", license_note="see `attribution`")
@@ -711,7 +908,7 @@ def _habitat_sum(lat: float, lon: float, vessels: list[dict], max_range_m: float
 @logged
 @placed
 async def habitat_received_level(lat: float | None = None, lon: float | None = None, place: str | None = None,
-                                 max_range_km: float = 30.0, hours_back: float = 0, top: int = 10) -> dict:
+                                 max_range_km: float = 30.0, hours_back: float = 0, top: int = 10) -> HabitatResult:
     """Broadband received level (dB re 1 uPa) at a fixed site — a fish farm,
     reef, hydrophone or marine protected area — from the ships around it,
     power-summed. Each vessel's source level comes from its AIS class, speed
@@ -764,7 +961,7 @@ async def habitat_received_level(lat: float | None = None, lon: float | None = N
 
 @mcp.tool(title="About Clairwave", annotations=ToolAnnotations(title="About Clairwave", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
 @logged
-async def about() -> dict:
+async def about() -> AboutResult:
     """What Clairwave provides, which models/data back each tool, and limits."""
     return {
         "platform": SITE,
